@@ -1,10 +1,29 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { type } from './const.js';
+
+// Statistics for write operations
+const writeStats = {
+    filesWritten: 0,
+    filesSkippedUnchanged: 0,
+    filesErrored: 0
+};
+
+// Get write strategy from environment variable
+const WRITE_STRATEGY = (() => {
+    const strategy = process.env.EXPORT_WRITE_STRATEGY || 'skip-unchanged';
+    if (strategy !== 'skip-unchanged' && strategy !== 'overwrite') {
+        console.warn(`Invalid EXPORT_WRITE_STRATEGY "${strategy}", falling back to "skip-unchanged"`);
+        return 'skip-unchanged';
+    }
+    return strategy;
+})();
 
 export async function exportMarkDownFiles(page, books) {
     const folderPath = process.env.EXPORT_PATH;
     console.log("download folderPath: " + folderPath)
+    console.log(`Write strategy: ${WRITE_STRATEGY}`);
     if (!fs.existsSync(folderPath)) {
         console.error(`export path:${folderPath} is not exist`)
         process.exit(1)
@@ -17,6 +36,7 @@ export async function exportMarkDownFiles(page, books) {
     }
 
     console.log(`=====> Export successfully! Have a good day!`);
+    console.log(`Summary: ${writeStats.filesWritten} written, ${writeStats.filesSkippedUnchanged} skipped (unchanged), ${writeStats.filesErrored} errors`);
     console.log();
 }
 
@@ -76,9 +96,7 @@ async function downloadFile(page, rootPath, book, mdname, url, maxRetries = 3) {
         try {
             await goto(page, url);
             console.log(`Waiting download document to ${rootPath}\\${mdname}`);
-            const fileNameWithExt = await waitForDownload(rootPath, book, mdname);
-            const fileName = path.basename(fileNameWithExt, path.extname(fileNameWithExt));
-            console.log("Download document " + book + "/" + fileName + " finished");
+            await waitForDownload(rootPath, book, mdname);
             console.log();
         } catch (error) {
             console.log(error);
@@ -88,6 +106,7 @@ async function downloadFile(page, rootPath, book, mdname, url, maxRetries = 3) {
                 await downloadWithRetries();
             } else {
                 console.log(`Download error after ${maxRetries} retries: ${error}`);
+                writeStats.filesErrored++;
             }
         }
     }
@@ -99,6 +118,39 @@ async function goto(page, link) {
     page.evaluate((link) => {
         location.href = link;
     }, link);
+}
+
+function computeHash(content) {
+    return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+async function writeFileWithStrategy(filePath, content, book, mdname) {
+    try {
+        if (WRITE_STRATEGY === 'skip-unchanged') {
+            if (fs.existsSync(filePath)) {
+                const existingContent = fs.readFileSync(filePath);
+                const existingHash = computeHash(existingContent);
+                const newHash = computeHash(content);
+                
+                if (existingHash === newHash) {
+                    console.log(`Skipped (unchanged): ${book}/${mdname}`);
+                    writeStats.filesSkippedUnchanged++;
+                    return;
+                }
+            }
+        }
+        
+        // Write atomically: write to .tmp then rename
+        const tmpPath = `${filePath}.tmp`;
+        fs.writeFileSync(tmpPath, content);
+        fs.renameSync(tmpPath, filePath);
+        console.log(`Written: ${book}/${mdname}`);
+        writeStats.filesWritten++;
+    } catch (error) {
+        console.error(`Error writing ${book}/${mdname}: ${error.message}`);
+        writeStats.filesErrored++;
+        throw error;
+    }
 }
   
 async function waitForDownload(rootPath, book, mdname, started = false) {
@@ -114,7 +166,41 @@ async function waitForDownload(rootPath, book, mdname, started = false) {
 
             if (eventType === 'rename' && filename === `${mdname}.md` && started) {
                 watcher.close();
-                resolve(filename);
+                
+                // Apply write strategy after download completes
+                const filePath = path.join(rootPath, `${mdname}.md`);
+                const tempPath = path.join(rootPath, `${mdname}.md.download`);
+                
+                try {
+                    // Rename downloaded file to temp location
+                    fs.renameSync(filePath, tempPath);
+                    
+                    // Read the downloaded content
+                    const content = fs.readFileSync(tempPath);
+                    
+                    // Apply write strategy
+                    writeFileWithStrategy(filePath, content, book, mdname).then(() => {
+                        // Clean up temp file
+                        if (fs.existsSync(tempPath)) {
+                            fs.unlinkSync(tempPath);
+                        }
+                        resolve(filename);
+                    }).catch((error) => {
+                        // Clean up temp file on error
+                        if (fs.existsSync(tempPath)) {
+                            fs.unlinkSync(tempPath);
+                        }
+                        reject(error);
+                    });
+                } catch (error) {
+                    console.error(`Error applying write strategy: ${error.message}`);
+                    writeStats.filesErrored++;
+                    // If we can't apply strategy, just keep the original file
+                    if (fs.existsSync(tempPath)) {
+                        fs.renameSync(tempPath, filePath);
+                    }
+                    resolve(filename);
+                }
             }
         });
 
