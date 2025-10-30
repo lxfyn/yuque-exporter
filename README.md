@@ -67,7 +67,17 @@ yarn
 | USER | 必须(有cookie文件时非必须) | 登录的用户名 |
 | PASSWORD | 必须(有cookie文件时非必须) | 登录的密码 |
 | EXPORT_PATH | 非必须 | 指定导出路径，默认为当前工作目录下的 output 目录(自动创建) |
+| EXPORT_WRITE_STRATEGY | 非必须 | 文件写入策略，支持 `skip-unchanged`（跳过未更改的文件）或 `overwrite`（总是覆盖），默认为 `skip-unchanged` |
 
+**关于 EXPORT_WRITE_STRATEGY (文件写入策略)：**
+
+- `skip-unchanged`（默认）：比较新旧文件内容的 SHA-256 哈希值，如果内容相同则跳过写入，避免重复导出时不必要的文件操作。适合增量导出场景。
+- `overwrite`：总是覆盖现有文件，与之前的行为一致。
+
+运行结束后会显示统计摘要，例如：
+```
+Summary: 5 written, 10 skipped (unchanged), 0 errors
+```
 
 - **ubuntu**
 ```bash
@@ -78,6 +88,12 @@ USER=xxx PASSWORD=xxx EXPORT_PATH=/path/to/exporter node main.js
 # 登录一次后会保存 cookie，之后使用cookie登录
 # node main.js
 EXPORT_PATH=/path/to/exporter node main.js
+
+# 使用 overwrite 模式，总是覆盖现有文件
+EXPORT_PATH=/path/to/exporter EXPORT_WRITE_STRATEGY=overwrite node main.js
+
+# 使用 skip-unchanged 模式（默认），跳过未更改的文件
+EXPORT_PATH=/path/to/exporter EXPORT_WRITE_STRATEGY=skip-unchanged node main.js
 ```
 
 - **windows**
@@ -86,11 +102,15 @@ EXPORT_PATH=/path/to/exporter node main.js
 set USER="xxx"
 set PASSWORD="xxx"
 # set EXPORT_PATH=/path/to/exporter
+# set EXPORT_WRITE_STRATEGY=skip-unchanged
 node main.js
 
 # 2. powershell
 # $env:USER="xxx";$env:PASSWORD="xxx"; node .\main.js
 $env:USER="xxx";$env:PASSWORD="xxx";$env:EXPORT_PATH="/path/to/exporter"; node .\main.js
+
+# 使用 overwrite 模式
+$env:USER="xxx";$env:PASSWORD="xxx";$env:EXPORT_PATH="/path/to/exporter";$env:EXPORT_WRITE_STRATEGY="overwrite"; node .\main.js
 ```
 
 - **MacOS**
@@ -99,7 +119,11 @@ $env:USER="xxx";$env:PASSWORD="xxx";$env:EXPORT_PATH="/path/to/exporter"; node .
 export USER='xxx'
 export PASSWORD='xxx'
 
-# 运行
+# 运行（默认使用 skip-unchanged 策略）
+node main.js
+
+# 使用 overwrite 模式
+export EXPORT_WRITE_STRATEGY='overwrite'
 node main.js
 ```
 
